@@ -1,0 +1,9 @@
+.venv/
+.env
+data/
+logs/
+wechatauto_logs/
+*.log
+__pycache__/
+*.py[cod]
+.dl/

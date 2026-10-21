@@ -1,0 +1,13 @@
+openai>=1.0
+PyYAML>=6.0
+python-dotenv>=1.0
+wechatauto-replica>=1.2.7
+winsdk
+pypinyin
+rapidocr-onnxruntime
+pypdf
+pymupdf
+requests
+beautifulsoup4
+yt-dlp
+imageio-ffmpeg
