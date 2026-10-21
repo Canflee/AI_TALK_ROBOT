@@ -446,32 +446,20 @@ PROACTIVE_MAX_MINUTES=90
   VIDEO_WEIGHTS=photography:0.20,aviation:0.15,anime:0.35,rhythm:0.15,ai:0.03,robotics:0.05,abstract:0.05
   ```
   > 格式是 `类别:权重`，多个用英文逗号分隔；程序会按相对比例自动归一化。
-  - `photography`：摄影器材
-  - `aviation`：航空
-  - `anime`：二次元 / 二创 / 动画
-  - `rhythm`：音游，BanG Dream 为主
   - `ai`：人工智能
   - `robotics`：机器人 / 具身智能
   - `abstract`：抽象小视频
 - 关键词：`CATEGORY_KEYWORDS`
-  - `photography`：摄影作品分享 / 摄影合集 / 街拍人像 / 风光摄影 / 镜头评测（兜底）
-  - `aviation`：航展 / 客机 / 战斗机 / 航空摄影
-  - `anime`：二次元动漫 / 动漫二创 / 动画 MAD / 手书
-  - `rhythm`：BanG Dream / BangDream 音游 / 音游手元 / 音游
   - `ai`：人工智能 / AI 大模型 / 智能体
   - `robotics`：具身智能 / 人形机器人 / 机器人演示
   - `abstract`：抽象 / 搞笑整活 / 鬼畜
 - 播放量：`VIDEO_MIN_PLAY`（默认 5 万）；不足 3 条时放宽到 `VIDEO_FALLBACK_MIN_PLAY`（默认 1 万）；按播放量排序，只在前 `VIDEO_TOP_CANDIDATES` 条里随机
 - 新鲜度：搜索当前年份，且发布时间在 `VIDEO_FRESHNESS_DAYS` 天内
 - 分类过滤：`CATEGORY_BAD_WORDS`
-  - 航空：排除怪兽/惊悚/电影/夺命/击落/坠毁/首摔/摔了
-  - 动漫：排除素材/素材库/无水印/白嫖/资源
-  - 摄影：排除素材/无水印/白嫖
+  - ai：排除ai视频/ai生成
 - 去重：已发过的 BVID 记录在 `data/sent_videos.json`
 - 分享语：`bot/proactive_flow.py` 的 `_video_share_line()` / `_video_fallback()`
   - 8–15 字，带一点吐槽/期待/评价，不是光秃秃的标签
-  - 例：「Mujica剧场版还要等到明年秋😴」「宇树这是要打起来了 😂」「又是个让人心痒的评测 😂」
-  - 标签规则：Mujica → Mujica，MyGO → MyGO，其他 BanG Dream → 邦邦新作，真正的手元/音游 → 音游
 
 ### 群聊吐槽
 
@@ -794,16 +782,10 @@ REPLY_MAX_BUBBLES=8
   - 安静时段不追问；你一回复就停止
 - 主动视频：
   - 约 20% 概率
-  - 权重：摄影 20 / 航空 15 / 动画 35 / 音游 15 / AI 3 / 机器人 5 / 抽象 5（总 98，归一化）
-  - 当前年份 + 365 天内；播放优先 ≥ 5 万，不足放宽到 1 万；按播放排序取前 2
   - 已发 BVID 去重
-  - 摄影偏向作品分享/合集/街拍/风光，器材评测兜底
-  - 航空过滤事故/击落/电影/怪兽；动漫/摄影过滤素材/无水印/白嫖
-  - 分享语 8–15 字，带吐槽/评价；Mujica/MyGO 用具体名字，真音游才叫音游，其余 BanG Dream 为「邦邦新作」
 - 配置：`.env` 增加 `PROACTIVE_*`、`WEB_SEARCH`、`ADMIN_WXIDS` 等说明
 - 游戏暂停：新增 `#pause` / `#resume`；UIA 发送会抢焦点，长时间游戏建议虚拟机/二机
-- 许可：MIT License，Copyright © 2026 参数分离
-- `run.bat` 只是启动器，业务更新不需要改它；改代码/人设后重启 `run.bat` 即可
+- 许可：MIT License，Copyright © 2026 canflee
 
 ---
 
