@@ -13,6 +13,12 @@ class ChatAdapter(ABC):
     def send_text(self, session_key: str, text: str, at_wxid: str = "", at_name: str = "") -> bool:
         raise NotImplementedError
 
+    def capture_sticker(self, session_key: str) -> str:
+        return ""
+
+    def send_file(self, session_key: str, path: str) -> bool:
+        return False
+
     @abstractmethod
     def stop(self) -> None:
         raise NotImplementedError

@@ -30,7 +30,10 @@ def simplify_query(query: str) -> str:
     query = DATE_RE.sub(" ", query)
     query = YEAR_MONTH_RE.sub(" ", query)
     query = MONTH_DAY_RE.sub(" ", query)
-    for word in ("当前", "现在", "目前", "实时"):
+    # 保留"实时"，只替换其他时间词
+    query = re.sub(r"\s*(当前|目前)\s*", " ", query)
+    query = re.sub(r"\s*(现在)\s*", " 现在", query)
+    for word in ("实时",):
         query = query.replace(word, " ")
     query = QUESTION_TAIL_RE.sub("", query)
     query = re.sub(r"\s+", " ", query).strip(" ，,。.!！？?~：:；;")

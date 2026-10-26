@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timezone
 
-from .llm.deepseek import DeepSeekError
+from .llm.aimodel import AIModelError
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ class ProactiveMixin:
                     temperature=persona.temperature,
                     max_tokens=800,
                 )
-            except DeepSeekError as exc:
+            except AIModelError as exc:
                 if "空内容" not in str(exc):
                     raise
                 reply = self.llm.chat(
@@ -114,7 +114,7 @@ class ProactiveMixin:
                     temperature=persona.temperature,
                     max_tokens=1200,
                 )
-            except DeepSeekError as exc:
+            except AIModelError as exc:
                 if "空内容" not in str(exc):
                     raise
                 reply = self.llm.chat(

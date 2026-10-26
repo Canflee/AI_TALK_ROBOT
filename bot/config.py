@@ -1,3 +1,4 @@
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,12 +27,35 @@ def _env_int(name: str) -> int:
         raise ValueError(f"{name} 必须是整数，当前值: {raw!r}") from exc
 
 
+def _env_int_or(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} 必须是整数，当前值: {raw!r}") from exc
+
+
 def _env_float(name: str) -> float:
     raw = _env_required(name)
     try:
         return float(raw)
     except ValueError as exc:
         raise ValueError(f"{name} 必须是数字，当前值: {raw!r}") from exc
+
+
+def _env_json(name: str, default: dict) -> dict:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{name} 必须是合法 JSON，当前值: {raw!r}") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} 必须是 JSON 对象，当前值: {raw!r}")
+    return value
 
 
 def _env_list(name: str) -> tuple[str, ...]:
@@ -136,8 +160,9 @@ class Settings:
     api_key: str
     base_url: str
     default_model: str
-    deepseek_timeout_seconds: float
-    deepseek_max_retries: int
+    aimodel_timeout_seconds: float
+    aimodel_max_retries: int
+    llm_extra_body: dict
     db_path: Path
     personas_path: Path
     log_level: str
@@ -162,6 +187,9 @@ class Settings:
     batch_max_chars: int
     group_banter_rate: float
     sticker_reply_rate: float
+    incoming_pause_every: int
+    incoming_pause_min_seconds: float
+    incoming_pause_max_seconds: float
     ocr_max_images: int
     pdf_max_files: int
     web_search: bool
@@ -174,6 +202,10 @@ class Settings:
     search_fetch_max_chars: int
     search_fetch_timeout_seconds: float
     article_max_chars: int
+    web_link_enabled: bool
+    web_link_max_pages: int
+    web_link_max_chars: int
+    web_link_timeout_seconds: float
     pdf_max_pages: int
     pdf_max_ocr_pages: int
     pdf_max_chars: int
@@ -214,6 +246,8 @@ class Settings:
     condition_query_max_tokens: int
     condition_judge_max_tokens: int
     condition_context_chars: int
+    doc_max_output_tokens: int
+    doc_retry_output_tokens: int
     proactive_enabled: bool
     proactive_targets: tuple[str, ...]
     proactive_quiet_start: float
@@ -263,13 +297,20 @@ def load_settings() -> Settings:
     retry_max_minutes = max(retry_min_minutes, _env_float("PROACTIVE_RETRY_MAX_MINUTES"))
     video_min_duration = max(1, _env_int("VIDEO_MIN_DURATION"))
     video_max_duration = max(video_min_duration, _env_int("VIDEO_MAX_DURATION"))
+    incoming_pause_every = max(1, _env_int("INCOMING_PAUSE_EVERY"))
+    incoming_pause_min_seconds = max(0.0, _env_float("INCOMING_PAUSE_MIN_SECONDS"))
+    incoming_pause_max_seconds = max(
+        incoming_pause_min_seconds,
+        _env_float("INCOMING_PAUSE_MAX_SECONDS"),
+    )
 
     return Settings(
-        api_key=os.getenv("DEEPSEEK_API_KEY", "").strip(),
-        base_url=_env_required("DEEPSEEK_BASE_URL"),
-        default_model=_env_required("DEEPSEEK_MODEL"),
-        deepseek_timeout_seconds=_env_float("DEEPSEEK_TIMEOUT_SECONDS"),
-        deepseek_max_retries=_env_int("DEEPSEEK_MAX_RETRIES"),
+        api_key=os.getenv("AIMODEL_API_KEY", "").strip(),
+        base_url=_env_required("AIMODEL_BASE_URL"),
+        default_model=_env_required("AIMODEL_MODEL"),
+        aimodel_timeout_seconds=_env_float("AIMODEL_TIMEOUT_SECONDS"),
+        aimodel_max_retries=_env_int("AIMODEL_MAX_RETRIES"),
+        llm_extra_body=_env_json("AIMODEL_EXTRA_BODY", {}),
         db_path=_resolve(_env_required("DB_PATH")),
         personas_path=_resolve(_env_required("PERSONAS_PATH")),
         log_level=_env_required("LOG_LEVEL").upper(),
@@ -294,6 +335,9 @@ def load_settings() -> Settings:
         batch_max_chars=_env_int("BATCH_MAX_CHARS"),
         group_banter_rate=_env_rate("GROUP_BANTER_RATE"),
         sticker_reply_rate=_env_rate("STICKER_REPLY_RATE"),
+        incoming_pause_every=incoming_pause_every,
+        incoming_pause_min_seconds=incoming_pause_min_seconds,
+        incoming_pause_max_seconds=incoming_pause_max_seconds,
         ocr_max_images=_env_int("OCR_MAX_IMAGES"),
         pdf_max_files=_env_int("PDF_MAX_FILES"),
         web_search=_env_bool("WEB_SEARCH"),
@@ -306,6 +350,10 @@ def load_settings() -> Settings:
         search_fetch_max_chars=_env_int("SEARCH_FETCH_MAX_CHARS"),
         search_fetch_timeout_seconds=_env_float("SEARCH_FETCH_TIMEOUT_SECONDS"),
         article_max_chars=_env_int("ARTICLE_MAX_CHARS"),
+        web_link_enabled=_env_bool("WEB_LINK_ENABLED"),
+        web_link_max_pages=max(1, _env_int("WEB_LINK_MAX_PAGES")),
+        web_link_max_chars=max(1000, _env_int("WEB_LINK_MAX_CHARS")),
+        web_link_timeout_seconds=_env_float("WEB_LINK_TIMEOUT_SECONDS"),
         pdf_max_pages=_env_int("PDF_MAX_PAGES"),
         pdf_max_ocr_pages=_env_int("PDF_MAX_OCR_PAGES"),
         pdf_max_chars=_env_int("PDF_MAX_CHARS"),
@@ -346,6 +394,8 @@ def load_settings() -> Settings:
         condition_query_max_tokens=_env_int("CONDITION_QUERY_MAX_TOKENS"),
         condition_judge_max_tokens=_env_int("CONDITION_JUDGE_MAX_TOKENS"),
         condition_context_chars=_env_int("CONDITION_CONTEXT_CHARS"),
+        doc_max_output_tokens=_env_int_or("DOC_MAX_OUTPUT_TOKENS", 8000),
+        doc_retry_output_tokens=_env_int_or("DOC_RETRY_OUTPUT_TOKENS", 16000),
         proactive_enabled=_env_bool("PROACTIVE_ENABLED"),
         proactive_targets=proactive_targets,
         proactive_quiet_start=_env_float("PROACTIVE_QUIET_START"),

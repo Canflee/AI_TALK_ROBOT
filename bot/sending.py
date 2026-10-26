@@ -20,6 +20,11 @@ ACTION_WORDS = (
 
 ACTION_PATTERN = re.compile(r"[（(]([^（）()]{1,40})[）)]")
 LEADING_ACTION_PATTERN = re.compile(r"^\s*[（(]([^（）()]{1,20})[）)]\s*")
+REPEAT_STRIP_RE = re.compile(r"[\s\*_`#，。！？!?、,.;:：\"“”'‘’()（）\[\]【】\-]+")
+
+
+def _repeat_key(text: str) -> str:
+    return REPEAT_STRIP_RE.sub("", text or "").lower()
 
 META_LINE_PATTERNS = (
     re.compile(r"^(用户|对方|他|她)(想|要|需要|希望|问|在问|说的是)"),
@@ -42,12 +47,29 @@ class SendingMixin:
     def _sanitize(self, text: str) -> str:
         text = re.sub(r"<ds_safety>.*?</ds_safety>", "", text, flags=re.S | re.I)
         text = re.sub(r"</?ds_safety>", "", text, flags=re.I)
+        text = re.sub(r"\*\*(.+?)\*\*", r"\1", text, flags=re.S)
+        text = re.sub(r"__(.+?)__", r"\1", text, flags=re.S)
         text = self._strip_target_prefix(text)
         for word, replacement in SENSITIVE_REPLACEMENTS.items():
             text = text.replace(word, replacement)
         text = self._strip_meta(text)
         text = re.sub(r"\n+", "|||", text)
+        text = self._dedupe_repeated(text)
         return self._strip_actions(text)
+
+    @staticmethod
+    def _dedupe_repeated(text: str) -> str:
+        parts = text.split("|||")
+        seen = set()
+        kept = []
+        for part in parts:
+            key = _repeat_key(part)
+            if len(key) >= 8 and key in seen:
+                continue
+            if key:
+                seen.add(key)
+            kept.append(part)
+        return "|||".join(kept)
 
     @staticmethod
     def _strip_meta(text: str) -> str:
@@ -79,40 +101,53 @@ class SendingMixin:
         return text.strip()
 
     @staticmethod
-    def _split_bubbles(text: str, limit: int = 80, max_bubbles: int = 8) -> list[str]:
-        raw = [part.strip() for part in text.split("|||") if part.strip()]
+    def _split_bubbles(
+        text: str,
+        limit: int = 80,
+        max_bubbles: int = 8,
+        split_limit: int = 1500,
+    ) -> list[str]:
+        raw = [part.strip() for part in re.split(r"\|\|\||\n+", text) if part.strip()]
         bubbles: list[str] = []
         for part in raw:
-            for segment in re.split(r"(?<=[。！？!?])(?=[^。！？!?])", part):
-                segment = segment.strip()
-                if not segment:
-                    continue
-                segment = re.sub(r"。+([）)])$", r"\1", segment)
-                segment = segment.rstrip("。").strip()
-                if not segment:
-                    continue
-                if len(segment) <= limit:
-                    bubbles.append(segment)
-                    continue
+            if len(part) <= split_limit:
+                bubbles.append(part)
+                continue
 
-                current = ""
-                for piece in re.split(r"(?<=[，,、；;])", segment):
-                    piece = piece.strip()
-                    if not piece:
-                        continue
-                    candidate = f"{current}{piece}" if current else piece
-                    if len(candidate) <= limit:
-                        current = candidate
-                        continue
+            sentences = [
+                segment.strip()
+                for segment in re.split(r"(?<=[。！？!?])(?=[^。！？!?])", part)
+                if segment.strip()
+            ]
+            current = ""
+            for sentence in sentences:
+                if len(sentence) > limit:
                     if current:
                         bubbles.append(current)
-                    while len(piece) > limit:
-                        bubbles.append(piece[:limit])
-                        piece = piece[limit:]
-                    current = piece
-                if current:
-                    bubbles.append(current)
-        return bubbles[:max_bubbles]
+                        current = ""
+                    bubbles.append(sentence)
+                    continue
+                candidate = f"{current}{sentence}" if current else sentence
+                if len(candidate) <= limit:
+                    current = candidate
+                else:
+                    if current:
+                        bubbles.append(current)
+                    current = sentence
+            if current:
+                bubbles.append(current)
+
+        cleaned = [bubble.rstrip("。").strip() for bubble in bubbles if bubble.strip()]
+        unique = []
+        seen = set()
+        for bubble in cleaned:
+            key = _repeat_key(bubble)
+            if len(key) >= 8 and key in seen:
+                continue
+            if key:
+                seen.add(key)
+            unique.append(bubble)
+        return unique[:max_bubbles]
 
     def _send(
         self,
@@ -121,6 +156,7 @@ class SendingMixin:
         at_wxid: str = "",
         at_name: str = "",
         split: bool = True,
+        max_bubbles: int | None = None,
     ) -> None:
         text = self._strip_target_prefix(text).strip()
         if not text:
@@ -129,10 +165,14 @@ class SendingMixin:
             self.adapter.send_text(session_key, text, at_wxid, at_name)
             return
 
+        limit = self.settings.max_bubbles
+        if max_bubbles is not None:
+            limit = max(1, min(limit, max_bubbles))
         bubbles = self._split_bubbles(
             text,
             limit=self.settings.bubble_limit,
-            max_bubbles=self.settings.max_bubbles,
+            max_bubbles=limit,
+            split_limit=self.settings.split_limit,
         )
         first = True
         for bubble in bubbles:

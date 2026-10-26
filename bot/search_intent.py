@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Sequence
 
 from .config import Settings
-from .llm.deepseek import DeepSeekClient, DeepSeekError
+from .llm.aimodel import AIModelClient, AIModelError
 from .media import build_search_query
 from .models import HistoryMessage
 from .search import simplify_query
@@ -47,7 +47,7 @@ def _history_text(history: Sequence[HistoryMessage]) -> str:
 
 def _ask(
     settings: Settings,
-    llm: DeepSeekClient,
+    llm: AIModelClient,
     messages: list[dict],
     max_tokens: int,
 ) -> str:
@@ -58,7 +58,7 @@ def _ask(
             temperature=0.0,
             max_tokens=max_tokens,
         )
-    except DeepSeekError as exc:
+    except AIModelError as exc:
         if "空内容" not in str(exc):
             raise
         logger.info("搜索规划返回空内容，提高 token 后重试")
@@ -72,7 +72,7 @@ def _ask(
 
 def _generate_query(
     settings: Settings,
-    llm: DeepSeekClient,
+    llm: AIModelClient,
     text: str,
     history: Sequence[HistoryMessage],
     force: bool,
@@ -129,7 +129,7 @@ def _generate_query(
 
 def plan_search(
     settings: Settings,
-    llm: DeepSeekClient,
+    llm: AIModelClient,
     text: str,
     history: Sequence[HistoryMessage],
 ) -> str:

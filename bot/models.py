@@ -61,3 +61,7 @@ class RouteResult:
     file_name: str = ""
     is_sticker: bool = False
     group_banter: bool = False
+    intent: str = ""
+    intent_query: str = ""
+    answer_mode: bool = False
+    image_search: bool = False

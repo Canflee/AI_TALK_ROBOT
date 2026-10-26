@@ -206,6 +206,47 @@ def _popular_fallback(settings: Settings) -> VideoInfo | None:
     return info
 
 
+def search_bilibili_videos(query: str, limit: int = 3) -> list[dict]:
+    query = (query or "").strip()
+    if not query:
+        return []
+    try:
+        response = _get_session().get(
+            "https://api.bilibili.com/x/web-interface/search/type",
+            params={
+                "search_type": "video",
+                "keyword": query,
+                "order": "totalrank",
+                "page": 1,
+            },
+            timeout=15,
+        )
+        items = (response.json().get("data") or {}).get("result") or []
+    except Exception:
+        logger.warning("B站任务搜索失败: %s", query, exc_info=True)
+        return []
+
+    results = []
+    for item in items:
+        bvid = item.get("bvid")
+        title = _clean_title(item.get("title"))
+        if not bvid or not title:
+            continue
+        results.append(
+            {
+                "title": title,
+                "bvid": bvid,
+                "url": f"https://www.bilibili.com/video/{bvid}",
+                "author": str(item.get("author") or ""),
+                "play": _play_count(item),
+                "duration": str(item.get("duration") or ""),
+            }
+        )
+        if len(results) >= limit:
+            break
+    return results
+
+
 def random_bilibili_video(settings: Settings) -> VideoInfo | None:
     known_categories = set(settings.video_category_keywords)
     unknown = sorted(set(settings.video_weights) - known_categories)

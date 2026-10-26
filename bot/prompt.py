@@ -40,8 +40,11 @@ def build_messages(
     search_text: str = "",
     video_text: str = "",
     link_text: str = "",
+    link_max_chars: int = 6000,
     contact_name: str = "",
     banter: bool = False,
+    answer_mode: bool = False,
+    image_search: bool = False,
 ) -> list[dict]:
     system = persona.system_prompt
     now = datetime.now()
@@ -50,11 +53,24 @@ def build_messages(
         f"{system}\n\n[当前时间] {time_text}（本地时间，以此为准；"
         "被问现在几点/今天几号就直接回答，不要用搜索结果里的日期）"
     )
+    if answer_mode:
+        answer_requirement = (
+            "这是解答/知识问题。先用一两句话给结论或概括；只有问题确实复杂、"
+            "对方要求细节时才展开步骤；默认仍尽量短。分段由你根据完整意思决定，"
+            "不要为了凑条数拆句；不确定就说不确定。"
+        )
+    else:
+        answer_requirement = (
+            "默认 1-2 条气泡，尽量短；问题复杂时可以按需要多答、多分段，"
+            "不要为了凑条数拆句；分段由你根据完整意思判断。"
+        )
     system = (
         f"{system}\n\n[输出要求] 只输出最终要发给对方的消息。"
         "不要输出分析、计划、搜索过程、内心独白，也不要写“用户想…”“我搜一下…”“让我查一下…”“等等”这类话。"
         "如果这轮没有搜索结果，不要假装正在搜索；直接回答或说没查到。"
-        "回答尽量短，除非对方要求详细；最多 3 条气泡，每条控制在 40 字内。"
+        f"{answer_requirement}"
+        "不要重复同一句话或同一段；如果发现自己开始重复，立即停止。"
+        "图片里的人物、作品或角色不确定时直接说不确定，不要编造。"
     )
     if contact_name.strip():
         system = (
@@ -69,6 +85,12 @@ def build_messages(
         )
     if summary.strip():
         system = f"{system}\n\n[此前对话摘要]\n{summary.strip()}"
+    if image_search:
+        system = (
+            f"{system}\n\n[图片识别] 先用一句话概括图片里能直接看到的特征"
+            "（发色、发型、服装、画风等），再参考搜索结果；只有用户要求细节再展开。"
+            "不要为了给出名字而编造；不确定就只描述特征并说明不确定。"
+        )
 
     budget = max(persona.max_context_chars - len(user_text), 0)
     selected: list[HistoryMessage] = []
@@ -94,7 +116,7 @@ def build_messages(
             f"{final_text}\n\n[图片文字识别（可能有误，请结合图片核对）]\n{ocr_text.strip()[:4000]}"
         ).strip()
     if document_text.strip():
-        label = f"PDF文字内容：{document_name}" if document_name else "PDF文字内容"
+        label = f"文档文字内容：{document_name}" if document_name else "文档文字内容"
         final_text = (
             f"{final_text}\n\n[{label}（可能有误，请结合上下文核对）]\n{document_text.strip()[:6000]}"
         ).strip()
@@ -102,7 +124,7 @@ def build_messages(
         final_text = (
             f"{final_text}\n\n[联网搜索结果（优先使用带今天/小时前/当前年月的最新信息；"
             "旧年份结果只作背景，不要当成当前情况；不确定就说不确定，不要编造）]\n"
-            f"{search_text.strip()[:4000]}"
+            f"{search_text.strip()[:20000]}"
         ).strip()
     if video_text.strip():
         final_text = (
@@ -111,17 +133,17 @@ def build_messages(
         ).strip()
     if link_text.strip():
         final_text = (
-            f"{final_text}\n\n[公众号文章正文（可能不完整，以此为准，不要编造）]\n"
-            f"{link_text.strip()[:6000]}"
+            f"{final_text}\n\n[链接网页正文（可能不完整，以此为准，不要编造）]\n"
+            f"{link_text.strip()[:link_max_chars]}"
         ).strip()
     if not final_text and document_text.strip():
-        final_text = "请看看这份 PDF。"
+        final_text = "请看看这份文档。"
     if not final_text and search_text.strip():
         final_text = "请根据搜索结果回答。"
     if not final_text and video_text.strip():
         final_text = "请看看这个视频。"
     if not final_text and link_text.strip():
-        final_text = "请看看这篇文章。"
+        final_text = "请看看这个链接。"
 
     paths = [path for path in (image_paths or []) if path][:max_images]
     if paths:

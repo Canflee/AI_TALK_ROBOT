@@ -7,6 +7,7 @@ HELP_TEXT = """可用命令：
 #id              查看当前会话 ID
 #reminders       查看待提醒（定时/条件）
 #proactive       查看主动消息任务
+#doc             文档处理（PDF/Word）
 #pause           暂停自动回复/主动消息
 #resume          恢复
 #cancel <编号>   取消提醒
@@ -26,6 +27,7 @@ class CommandMixin:
             "id", "会话id", "会话", "help", "帮助",
             "reminders", "提醒", "提醒列表", "cancel", "取消",
             "proactive", "主动", "主动列表",
+            "doc", "文档",
         }
         if parts[0].lower() in public:
             return parts
@@ -104,6 +106,10 @@ class CommandMixin:
                 f"{self.settings.proactive_max_minutes} 分钟。",
                 split=False,
             )
+            return
+
+        if name in {"doc", "文档"}:
+            self._handle_doc_command(message, parts)
             return
 
         if name in {"cancel", "取消"}:

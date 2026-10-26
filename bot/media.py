@@ -1,10 +1,13 @@
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Sequence
+from urllib.parse import urlparse
 
 from .article import extract_wechat_article_url, fetch_wechat_article
 from .config import Settings
+from .documents.reader import DocumentError, document_suffix, read_docx_text
 from .models import HistoryMessage
 from .ocr import ocr_image
 from .pdf import extract_pdf_text
@@ -12,6 +15,9 @@ from .search import fetch_page_text, format_results, search_web
 from .video import download_frames, extract_bilibili_url, fetch_bilibili_info
 
 logger = logging.getLogger(__name__)
+
+WEB_URL_RE = re.compile(r"https?://[^\s<>\"'，。；）】)\]}]+")
+WEB_LINK_BLOCKED_HOSTS = ("mp.weixin.qq.com", "bilibili.com", "b23.tv")
 
 
 @dataclass(slots=True)
@@ -24,6 +30,23 @@ class MediaContext:
     search_text: str = ""
     search_query: str = ""
     stored_text: str = ""
+
+
+def extract_web_urls(text: str, limit: int) -> list[str]:
+    urls: list[str] = []
+    for match in WEB_URL_RE.finditer(text or ""):
+        url = match.group(0).rstrip(".,;)]}，。；）】")
+        host = (urlparse(url).hostname or "").lower()
+        if not host or any(
+            host == blocked or host.endswith("." + blocked)
+            for blocked in WEB_LINK_BLOCKED_HOSTS
+        ):
+            continue
+        if url not in urls:
+            urls.append(url)
+        if len(urls) >= limit:
+            break
+    return urls
 
 
 def clean_search_subject(text: str) -> str:
@@ -70,16 +93,13 @@ def build_search_query(text: str, history: Sequence[HistoryMessage]) -> str:
     return ""
 
 
-def enrich_message(
+def parse_media(
     settings: Settings,
     session_key: str,
     user_text: str,
     image_paths: list[str],
     file_paths: list[str],
-    file_names: list[str],
-    history: Sequence[HistoryMessage],
     banter: bool,
-    search_query: str,
 ) -> MediaContext:
     ctx = MediaContext(image_paths=list(image_paths))
 
@@ -123,6 +143,40 @@ def enrich_message(
             ctx.link_text = "（这篇公众号文章没打开，可能需要验证）"
             logger.info("公众号文章解析失败，会话=%s，链接=%s", session_key, article_url)
 
+    if (
+        not banter
+        and not video_url
+        and not article_url
+        and settings.web_link_enabled
+    ):
+        urls = extract_web_urls(user_text, settings.web_link_max_pages)
+        if urls:
+            with ThreadPoolExecutor(max_workers=min(5, len(urls))) as pool:
+                fetched = list(
+                    pool.map(
+                        lambda url: (
+                            url,
+                            fetch_page_text(
+                                url,
+                                settings.web_link_max_chars,
+                                settings.web_link_timeout_seconds,
+                            ),
+                        ),
+                        urls,
+                    )
+                )
+            pages = [f"[网页] {url}\n{text}" for url, text in fetched if text]
+            if pages:
+                ctx.link_text = "\n\n".join(pages)
+                logger.info(
+                    "网页抓取完成，会话=%s，页数=%s，字符数=%s",
+                    session_key,
+                    len(pages),
+                    len(ctx.link_text),
+                )
+            else:
+                logger.info("网页抓取无内容，会话=%s，链接数=%s", session_key, len(urls))
+
     if ctx.image_paths:
         ocr_parts = [
             ocr_image(path)
@@ -132,22 +186,90 @@ def enrich_message(
         logger.info("图片 OCR 完成，会话=%s，字符数=%s", session_key, len(ctx.ocr_text))
 
     if file_paths:
-        doc_parts = [
-            extract_pdf_text(
-                path,
-                max_pages=settings.pdf_max_pages,
-                max_ocr_pages=settings.pdf_max_ocr_pages,
-                max_chars=settings.pdf_max_chars,
-            )
-            for path in file_paths[:settings.pdf_max_files]
-        ]
-        ctx.doc_text = "\n\n".join(part for part in doc_parts if part).strip()
-        logger.info("PDF 文本提取完成，会话=%s，字符数=%s", session_key, len(ctx.doc_text))
+        doc_parts = []
+        for path in file_paths[:settings.pdf_max_files]:
+            suffix = document_suffix(path)
+            try:
+                if suffix == ".pdf":
+                    part = extract_pdf_text(
+                        path,
+                        max_pages=settings.pdf_max_pages,
+                        max_ocr_pages=settings.pdf_max_ocr_pages,
+                        max_chars=settings.pdf_max_chars,
+                    )
+                elif suffix == ".docx":
+                    part = read_docx_text(path, max_chars=settings.pdf_max_chars)
+                elif suffix == ".doc":
+                    part = "（暂不支持 .doc，请另存为 .docx）"
+                else:
+                    part = ""
+            except DocumentError as exc:
+                logger.warning("读取文档失败: %s", path, exc_info=True)
+                part = f"（文档读取失败：{exc}）"
+            except Exception:
+                logger.warning("读取文档失败: %s", path, exc_info=True)
+                part = "（文档读取失败）"
+            if part:
+                doc_parts.append(part)
+        ctx.doc_text = "\n\n".join(doc_parts).strip()
+        logger.info("文档文本提取完成，会话=%s，字符数=%s", session_key, len(ctx.doc_text))
+
+    return ctx
+
+
+def merge_media_contexts(contexts: Sequence[MediaContext]) -> MediaContext:
+    merged = MediaContext()
+    for ctx in contexts:
+        for path in ctx.image_paths:
+            if path not in merged.image_paths:
+                merged.image_paths.append(path)
+        for name in ("video_text", "link_text", "ocr_text", "doc_text"):
+            value = getattr(ctx, name).strip()
+            if not value:
+                continue
+            current = getattr(merged, name)
+            setattr(merged, name, f"{current}\n\n{value}".strip() if current else value)
+    return merged
+
+
+def enrich_message(
+    settings: Settings,
+    session_key: str,
+    user_text: str,
+    image_paths: list[str],
+    file_paths: list[str],
+    file_names: list[str],
+    history: Sequence[HistoryMessage],
+    banter: bool,
+    search_query: str,
+    preparsed: MediaContext | None = None,
+) -> MediaContext:
+    if preparsed is not None:
+        ctx = MediaContext(
+            image_paths=list(preparsed.image_paths),
+            video_text=preparsed.video_text,
+            link_text=preparsed.link_text,
+            ocr_text=preparsed.ocr_text,
+            doc_text=preparsed.doc_text,
+        )
+    else:
+        ctx = parse_media(
+            settings,
+            session_key,
+            user_text,
+            image_paths,
+            file_paths,
+            banter,
+        )
+
+    video_url = extract_bilibili_url(user_text) if not banter else ""
+    article_url = extract_wechat_article_url(user_text) if not banter else ""
 
     if (
         not banter
         and not video_url
         and not article_url
+        and not ctx.link_text
         and settings.web_search
         and search_query
     ):
@@ -160,16 +282,29 @@ def enrich_message(
         )
         if results:
             pages = []
-            for item in results[:settings.search_fetch_pages]:
-                if not item.url:
-                    continue
-                page = fetch_page_text(
-                    item.url,
-                    settings.search_fetch_max_chars,
-                    settings.search_fetch_timeout_seconds,
-                )
-                if page:
-                    pages.append(f"[网页内容：{item.title}]\n{page}")
+            candidates = [
+                item
+                for item in results[:settings.search_fetch_pages]
+                if item.url
+            ]
+            if candidates:
+                with ThreadPoolExecutor(max_workers=min(5, len(candidates))) as pool:
+                    fetched = list(
+                        pool.map(
+                            lambda item: (
+                                item,
+                                fetch_page_text(
+                                    item.url,
+                                    settings.search_fetch_max_chars,
+                                    settings.search_fetch_timeout_seconds,
+                                ),
+                            ),
+                            candidates,
+                        )
+                    )
+                for item, page in fetched:
+                    if page:
+                        pages.append(f"[网页内容：{item.title}]\n{page}")
             ctx.search_text = "\n\n".join(pages + [format_results(results)])
             logger.info(
                 "联网搜索完成，会话=%s，关键词=%s，结果数=%s，网页数=%s",
@@ -183,8 +318,8 @@ def enrich_message(
             logger.info("联网搜索无结果，会话=%s，关键词=%s", session_key, query)
 
     if file_paths:
-        detail = ctx.doc_text[:2000] if ctx.doc_text else "(PDF文字提取失败)"
-        stored_text = f"[PDF] {file_names[0]} {detail} {user_text}".strip()
+        detail = ctx.doc_text[:2000] if ctx.doc_text else "(文档文字提取失败)"
+        stored_text = f"[文档] {file_names[0]} {detail} {user_text}".strip()
     elif ctx.image_paths:
         detail = ctx.ocr_text[:2000] if ctx.ocr_text else "(图片)"
         stored_text = f"[图片] {detail} {user_text}".strip()
@@ -195,6 +330,6 @@ def enrich_message(
     if ctx.video_text:
         stored_text = f"{stored_text}\n[视频] {ctx.video_text[:1200]}".strip()
     if ctx.link_text:
-        stored_text = f"{stored_text}\n[文章] {ctx.link_text[:1500]}".strip()
+        stored_text = f"{stored_text}\n[链接] {ctx.link_text[:1500]}".strip()
     ctx.stored_text = stored_text
     return ctx

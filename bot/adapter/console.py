@@ -56,5 +56,9 @@ class ConsoleAdapter(ChatAdapter):
         print(f"\n{self.bot_name}: {text}\n")
         return True
 
+    def send_file(self, session_key: str, path: str) -> bool:
+        print(f"\n{self.bot_name} 发送文件: {path}\n")
+        return True
+
     def stop(self) -> None:
         self._running = False

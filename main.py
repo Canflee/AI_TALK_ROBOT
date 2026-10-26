@@ -1,3 +1,5 @@
+import atexit
+import ctypes
 import logging
 import sys
 from pathlib import Path
@@ -8,10 +10,48 @@ from bot.adapter.console import ConsoleAdapter
 from bot.adapter.wechatauto import WeChat4Adapter
 from bot.bot import WeChatBot
 from bot.config import load_settings
-from bot.llm.deepseek import DeepSeekClient
+from bot.llm.aimodel import AIModelClient
 from bot.memory import MemoryStore
 from bot.personas import PersonaRegistry
 from bot.wechat_check import check_weixin4
+
+_SINGLE_INSTANCE_MUTEX = "Local\\ai_talk_bot_single_instance"
+_mutex_handle = None
+_kernel32 = None
+
+
+def _get_kernel32():
+    global _kernel32
+    if _kernel32 is None:
+        lib = ctypes.WinDLL("kernel32", use_last_error=True)
+        lib.CreateMutexW.restype = ctypes.c_void_p
+        lib.CreateMutexW.argtypes = (ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p)
+        lib.CloseHandle.argtypes = (ctypes.c_void_p,)
+        _kernel32 = lib
+    return _kernel32
+
+
+def _acquire_single_instance() -> bool:
+    global _mutex_handle
+    if sys.platform != "win32":
+        return True
+    kernel32 = _get_kernel32()
+    handle = kernel32.CreateMutexW(None, False, _SINGLE_INSTANCE_MUTEX)
+    if not handle:
+        return True
+    if ctypes.get_last_error() == 183:
+        kernel32.CloseHandle(handle)
+        return False
+    _mutex_handle = handle
+    return True
+
+
+def _release_single_instance() -> None:
+    global _mutex_handle
+    if _mutex_handle is None:
+        return
+    _get_kernel32().CloseHandle(_mutex_handle)
+    _mutex_handle = None
 
 
 def setup_logging(level: str) -> None:
@@ -26,6 +66,11 @@ def setup_logging(level: str) -> None:
 
 
 def main() -> int:
+    if not _acquire_single_instance():
+        print("已有 ai_talk 实例在运行，请先关闭旧的 run.bat / main.py")
+        return 1
+    atexit.register(_release_single_instance)
+
     try:
         settings = load_settings()
     except ValueError as exc:
@@ -35,7 +80,7 @@ def main() -> int:
     logger = logging.getLogger("main")
 
     if not settings.api_key:
-        logger.error("未配置 DEEPSEEK_API_KEY，请复制 .env.example 为 .env 并填写")
+        logger.error("未配置 AIMODEL_API_KEY，请复制 .env.example 为 .env 并填写")
         return 1
 
     if settings.adapter not in {"wechatauto", "console"}:
@@ -55,11 +100,12 @@ def main() -> int:
         return 1
 
     store = MemoryStore(settings.db_path)
-    llm = DeepSeekClient(
+    llm = AIModelClient(
         settings.api_key,
         settings.base_url,
-        settings.deepseek_timeout_seconds,
-        settings.deepseek_max_retries,
+        settings.aimodel_timeout_seconds,
+        settings.aimodel_max_retries,
+        settings.llm_extra_body,
     )
     if settings.adapter == "console":
         adapter = ConsoleAdapter(settings.bot_name)
